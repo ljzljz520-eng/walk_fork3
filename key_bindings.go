@@ -37,4 +37,5 @@ var (
 	keyPaste     = key.NewBinding(key.WithKeys("p"))
 	keyHidden    = key.NewBinding(key.WithKeys("."))
 	keyHelp      = key.NewBinding(key.WithKeys("?"))
+	keyDedup     = key.NewBinding(key.WithKeys("ctrl+d"))
 )

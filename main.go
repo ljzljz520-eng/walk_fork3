@@ -72,6 +72,7 @@ func main() {
 	}
 
 	argsWithoutFlags := make([]string, 0)
+	startDedup := false
 	for i := 1; i < len(os.Args); i++ {
 		if os.Args[i] == "--help" || os.Args[1] == "-h" {
 			usage(os.Stderr, true)
@@ -106,6 +107,10 @@ func main() {
 			withBorder = true
 			continue
 		}
+		if os.Args[i] == "--dedup" {
+			startDedup = true
+			continue
+		}
 		argsWithoutFlags = append(argsWithoutFlags, os.Args[i])
 	}
 
@@ -119,8 +124,19 @@ func main() {
 	output := termenv.NewOutput(os.Stderr)
 	lipgloss.SetColorProfile(output.ColorProfile())
 
+	if startDedup {
+		// Dedup scans a tree; a file argument means "scan its directory".
+		if fi, err := os.Stat(startPath); err == nil && !fi.IsDir() {
+			startPath = filepath.Dir(startPath)
+		}
+	}
+
 	m.path = startPath
 	m.list()
+
+	if startDedup {
+		m.initCmd = m.enterDedup()
+	}
 
 	opts := []tea.ProgramOption{
 		tea.WithOutput(os.Stderr),
@@ -171,6 +187,8 @@ type model struct {
 	showHelp              bool                // Show help
 	statusBar             *vm.Program         // Status bar program.
 	quitting              bool                // Whether we are quitting the program.
+	dedup                 *dedupState         // Active duplicate-finder session.
+	initCmd               tea.Cmd             // Command run on program start (e.g. dedup scan).
 }
 
 type position struct {
@@ -189,7 +207,7 @@ type (
 )
 
 func (m *model) Init() tea.Cmd {
-	return nil
+	return m.initCmd
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -199,6 +217,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termHeight = msg.Height
 		if m.termHeight < 3 {
 			m.termHeight = 3
+		}
+		if m.dedup != nil {
+			m.dedup.width = m.termWidth
+			m.dedup.height = m.termHeight
 		}
 		// Reset position history as c&r changes.
 		m.positions = make(map[string]position)
@@ -214,6 +236,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Duplicate-finder mode owns all key input while active.
+		if m.dedup != nil {
+			return m, m.dedupKey(msg)
+		}
+
 		// Make undo work even if we are in fuzzy mode.
 		if key.Matches(msg, keyUndo) && len(m.toBeDeleted) > 0 {
 			m.toBeDeleted = m.toBeDeleted[:len(m.toBeDeleted)-1]
@@ -409,7 +436,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				destDir := m.path
 				baseName := filepath.Base(m.yankedFilePath)
 				destPath := filepath.Join(destDir, baseName)
-				
+
 				// Don't paste if file already exists
 				if _, err := os.Stat(destPath); err == nil {
 					m.pasteError = "file already exists"
@@ -425,6 +452,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateOffset()
 			}
 			return m, nil
+
+		case key.Matches(msg, keyDedup):
+			return m, m.enterDedup()
 
 		case key.Matches(msg, keyHelp):
 			m.showHelp = !m.showHelp
@@ -443,6 +473,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pasteError = ""
 		m.updateOffset()
 		m.saveCursorPosition()
+
+	case dedupTickMsg:
+		if m.dedup != nil {
+			return m, m.dedupTick()
+		}
 
 	case clearSearchMsg:
 		if m.searchId == int(msg) {
@@ -488,6 +523,10 @@ func (m *model) updateSearch(msg tea.KeyMsg) {
 }
 
 func (m *model) View() string {
+	if m.dedup != nil {
+		return m.dedupView()
+	}
+
 	if m.showHelp {
 		out := &Builder{}
 		out.WriteString(bar.Render("help") + "\n\n")
@@ -846,7 +885,7 @@ func (m *model) pasteFile(srcPath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	if srcInfo.IsDir() {
 		return copyDir(srcPath, destPath)
 	}

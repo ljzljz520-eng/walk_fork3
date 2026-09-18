@@ -24,6 +24,7 @@ func usage(out io.Writer, full bool) {
 	put("    d, delete\tDelete file or dir")
 	put("    y\tCopy to clipboard")
 	put("    .\tHide hidden files")
+	put("    ctrl+d\tFind duplicate files (dedup mode)")
 	put("    ?\tShow help")
 	if full {
 		put("\n  Flags:\n")
@@ -33,6 +34,7 @@ func usage(out io.Writer, full bool) {
 		put("    --preview\tdisplay preview")
 		put("    --with-border\tpreview with border")
 		put("    --fuzzy\tfuzzy mode")
+		put("    --dedup\tstart in duplicate-finder mode")
 	}
 	_ = w.Flush()
 	_, _ = fmt.Fprintf(out, "\n")
